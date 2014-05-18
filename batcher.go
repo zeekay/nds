@@ -11,7 +11,7 @@ import (
 // entities can be considered instead instead of slices of entities. Although
 // for efficiency the datastore works best with batch gets, puts and deletes.
 type batcher struct {
-	c appengine.Context
+	context appengine.Context
 
 	getTupChan    chan getTup
 	getClosedChan chan bool
@@ -25,7 +25,7 @@ type getTup struct {
 
 func newBatcher(c appengine.Context) *batcher {
 	b := &batcher{
-		c: c,
+		context: c,
 
 		getTupChan:    make(chan getTup),
 		getClosedChan: make(chan bool),
@@ -75,7 +75,7 @@ func (b *batcher) datastoreGetLoop() {
 				pls = append(pls, getTup.pl)
 				errChans = append(errChans, getTup.errChan)
 			default:
-				err := datastore.GetMulti(b.c, keys, pls)
+				err := datastore.GetMulti(b.context, keys, pls)
 				if me, ok := err.(appengine.MultiError); ok {
 					for i, errChan := range errChans {
 						errChan <- me[i]
