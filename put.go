@@ -1,6 +1,7 @@
 package nds
 
 import (
+    "fmt"
 	"appengine"
 	"appengine/datastore"
 	"appengine/memcache"
@@ -90,6 +91,7 @@ func putMulti(cc *context,
 		pl := datastore.PropertyList{}
 		elem := addrValue(src.Index(i))
 		if err := saveStruct(elem.Interface(), &pl); err != nil {
+            fmt.Println("here we aer")
 			return nil, err
 		}
 		cc.cache[key.Encode()] = pl
