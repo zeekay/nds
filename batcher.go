@@ -13,69 +13,102 @@ import (
 type batcher struct {
 	context appengine.Context
 
-	getTupChan    chan getTup
-	getClosedChan chan bool
+	executor executor
+
+	payloadChan chan payload
+	closedChan  chan bool
 }
 
-type getTup struct {
-	key     *datastore.Key
-	pl      datastore.PropertyList
+type executor func(appengine.Context, []interface{}) error
+
+type payload struct {
+	item    interface{}
 	errChan chan error
 }
 
-func newBatcher(c appengine.Context) *batcher {
-	b := &batcher{
-		context: c,
-
-		getTupChan:    make(chan getTup),
-		getClosedChan: make(chan bool),
+var dsGetExecutor = func(c appengine.Context, items []interface{}) error {
+	keys := make([]*datastore.Key, len(items))
+	vals := make([]interface{}, len(items))
+	for i, item := range items {
+		keys[i] = item.([]interface{})[0].(*datastore.Key)
+		vals[i] = item.([]interface{})[1]
 	}
-	go b.datastoreGetLoop()
+	return datastore.GetMulti(c, keys, vals)
+}
+
+var dsPutExecutor = func(c appengine.Context, items []interface{}) error {
+	keys := make([]*datastore.Key, len(items))
+	vals := make([]interface{}, len(items))
+	for i, item := range items {
+		keys[i] = item.([]interface{})[0].(*datastore.Key)
+		vals[i] = item.([]interface{})[1]
+	}
+	completeKeys, err := datastore.PutMulti(c, keys, vals)
+	for i, key := range keys {
+		if key.Incomplete() {
+			*key = *completeKeys[i]
+		}
+	}
+	return err
+}
+
+var dsDeleteExecutor = func(c appengine.Context, items []interface{}) error {
+	keys := make([]*datastore.Key, len(items))
+	for i, item := range items {
+		keys[i] = item.(*datastore.Key)
+	}
+	return datastore.DeleteMulti(c, keys)
+}
+
+func newBatcher(c appengine.Context, executor executor) *batcher {
+	b := &batcher{
+		context:  c,
+		executor: executor,
+
+		payloadChan: make(chan payload),
+		closedChan:  make(chan bool),
+	}
+	go b.loop()
 	return b
 }
 
 func (b *batcher) Close() {
 	fmt.Println("Close called.")
-	close(b.getTupChan)
-	<-b.getClosedChan
+	close(b.payloadChan)
+	<-b.closedChan
 }
 
-func (b *batcher) DatastoreGet(key *datastore.Key,
-	pl datastore.PropertyList) error {
+func (b *batcher) Add(item interface{}) error {
 	errChan := make(chan error)
-	b.getTupChan <- getTup{key, pl, errChan}
+	b.payloadChan <- payload{item, errChan}
 	return <-errChan
 }
 
-func (b *batcher) datastoreGetLoop() {
-	keys := []*datastore.Key{}
-	pls := []datastore.PropertyList{}
+func (b *batcher) loop() {
+	items := []interface{}{}
 	errChans := []chan error{}
 	for {
-		if len(keys) == 0 {
+		if len(items) == 0 {
 			select {
-			case getTup, ok := <-b.getTupChan:
+			case payload, ok := <-b.payloadChan:
 				if !ok {
-					b.getClosedChan <- true
+					b.closedChan <- true
 					return
 				}
-				keys = append(keys, getTup.key)
-				pls = append(pls, getTup.pl)
-				errChans = append(errChans, getTup.errChan)
+				items = append(items, payload.item)
+				errChans = append(errChans, payload.errChan)
 			}
 		} else {
-			fmt.Println("keys", len(keys))
 			select {
-			case getTup, ok := <-b.getTupChan:
+			case payload, ok := <-b.payloadChan:
 				if !ok {
-					b.getClosedChan <- true
+					b.closedChan <- true
 					return
 				}
-				keys = append(keys, getTup.key)
-				pls = append(pls, getTup.pl)
-				errChans = append(errChans, getTup.errChan)
+				items = append(items, payload.item)
+				errChans = append(errChans, payload.errChan)
 			default:
-				err := datastore.GetMulti(b.context, keys, pls)
+				err := b.executor(b.context, items)
 				if me, ok := err.(appengine.MultiError); ok {
 					for i, errChan := range errChans {
 						errChan <- me[i]
@@ -85,8 +118,7 @@ func (b *batcher) datastoreGetLoop() {
 						errChan <- err
 					}
 				}
-				keys = []*datastore.Key{}
-				pls = []datastore.PropertyList{}
+				items = []interface{}{}
 				errChans = []chan error{}
 			}
 		}
