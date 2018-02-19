@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/qedus/nds"
-	"golang.org/x/net/context"
+	"context"
 	"google.golang.org/appengine"
 	"google.golang.org/appengine/datastore"
 	"google.golang.org/appengine/memcache"
